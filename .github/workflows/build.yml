@@ -93,9 +93,7 @@ jobs:
         for dir in try-*; do
           if [ -d "$dir" ]; then
             chmod +x "$dir/try"
-            platform=$(echo "$dir" | sed 's/try-//')
-            mv "$dir/try" "$dir/try-$platform"
-            tar -czf "${dir}.tar.gz" -C "$dir" "try-$platform"
+            tar -czf "${dir}.tar.gz" -C "$dir" "try"
           fi
         done
         ls -la *.tar.gz
