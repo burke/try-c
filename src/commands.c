@@ -246,41 +246,31 @@ void cmd_init(int argc, char **argv, const char *tries_path) {
   const char *shell = getenv("SHELL");
   bool is_fish = (shell && strstr(shell, "fish") != NULL);
 
-  // Get the path to this executable
-  char self_path[1024];
-  ssize_t len = readlink("/proc/self/exe", self_path, sizeof(self_path) - 1);
-  if (len == -1) {
-    // Fallback for macOS
-    strncpy(self_path, "try", sizeof(self_path) - 1);
-  } else {
-    self_path[len] = '\0';
-  }
-
   if (is_fish) {
     // Fish shell version
     printf(
       "function try\n"
-      "  set -l out ('%s' exec --path '%s' $argv 2>/dev/tty)\n"
+      "  set -l out (command try exec --path '%s' $argv 2>/dev/tty)\n"
       "  if test $status -eq 0\n"
       "    eval $out\n"
       "  else\n"
       "    echo $out\n"
       "  end\n"
       "end\n",
-      self_path, tries_path);
+      tries_path);
   } else {
     // Bash/Zsh version
     printf(
       "try() {\n"
       "  local out\n"
-      "  out=$('%s' exec --path '%s' \"$@\" 2>/dev/tty)\n"
+      "  out=$(command try exec --path '%s' \"$@\" 2>/dev/tty)\n"
       "  if [ $? -eq 0 ]; then\n"
       "    eval \"$out\"\n"
       "  else\n"
       "    echo \"$out\"\n"
       "  fi\n"
       "}\n",
-      self_path, tries_path);
+      tries_path);
   }
 }
 
