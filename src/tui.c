@@ -32,6 +32,7 @@ Z_VEC_GENERATE_IMPL(TryEntry *, TryEntryPtr)
 static vec_TryEntry all_tries = {0};
 static vec_TryEntryPtr filtered_ptrs = {0};
 static zstr filter_buffer = {0};
+static int filter_cursor = 0;  // Cursor position in filter_buffer
 static int selected_index = 0;
 static int scroll_offset = 0;
 static int marked_count = 0;  // Number of items marked for deletion
@@ -64,6 +65,8 @@ static void clear_state(void) {
 
   // filtered_ptrs just contains pointers, no need to free entries
   vec_free_TryEntryPtr(&filtered_ptrs);
+
+  filter_cursor = 0;
 }
 
 static int compare_tries_by_score(const void *a, const void *b) {
@@ -136,6 +139,89 @@ static void filter_tries(void) {
   if (selected_index >= (int)filtered_ptrs.length) {
     selected_index = 0;
   }
+}
+
+// Handle readline-style keybindings for text editing
+// Returns true if the key was handled, false if it should be treated as regular input
+static bool handle_readline_keybinding(zstr *buffer, int *cursor, int key) {
+  if (key == 1) {  // Ctrl-A (move to start)
+    *cursor = 0;
+    return true;
+  } else if (key == 5) {  // Ctrl-E (move to end)
+    *cursor = (int)zstr_len(buffer);
+    return true;
+  } else if (key == 2 || key == ARROW_LEFT) {  // Ctrl-B or LEFT (move left)
+    if (*cursor > 0)
+      (*cursor)--;
+    return true;
+  } else if (key == 6 || key == ARROW_RIGHT) {  // Ctrl-F or RIGHT (move right)
+    if (*cursor < (int)zstr_len(buffer))
+      (*cursor)++;
+    return true;
+  } else if (key == 11) {  // Ctrl-K (kill after cursor)
+    int buffer_len = (int)zstr_len(buffer);
+    if (*cursor < buffer_len) {
+      char *data = zstr_data(buffer);
+      Z_CLEANUP(zstr_free) zstr new_buffer = zstr_init();
+      for (int i = 0; i < *cursor; i++) {
+        zstr_push(&new_buffer, data[i]);
+      }
+      zstr_free(buffer);
+      *buffer = new_buffer;
+    }
+    return true;
+  } else if (key == 23) {  // Ctrl-W (kill word)
+    int buffer_len = (int)zstr_len(buffer);
+    if (*cursor > 0) {
+      char *data = zstr_data(buffer);
+
+      // Move back past any trailing non-word characters
+      int end_pos = *cursor - 1;
+      while (end_pos >= 0 && !isalnum((unsigned char)data[end_pos])) {
+        end_pos--;
+      }
+
+      // Move back past the word itself (alphanumeric characters)
+      int start_pos = end_pos;
+      while (start_pos >= 0 && isalnum((unsigned char)data[start_pos])) {
+        start_pos--;
+      }
+      start_pos++;  // Move to the first char of the word
+
+      // Build new buffer without the deleted word
+      Z_CLEANUP(zstr_free) zstr new_buffer = zstr_init();
+      for (int i = 0; i < start_pos; i++) {
+        zstr_push(&new_buffer, data[i]);
+      }
+      for (int i = *cursor; i < buffer_len; i++) {
+        zstr_push(&new_buffer, data[i]);
+      }
+
+      zstr_free(buffer);
+      *buffer = new_buffer;
+      *cursor = start_pos;
+    }
+    return true;
+  } else if (key == BACKSPACE || key == 127 || key == 8) {  // Backspace, DEL, or Ctrl-H
+    if (*cursor > 0) {
+      // Delete character before cursor
+      int buffer_len = (int)zstr_len(buffer);
+      Z_CLEANUP(zstr_free) zstr new_buffer = zstr_init();
+      char *data = zstr_data(buffer);
+
+      for (int i = 0; i < buffer_len; i++) {
+        if (i != *cursor - 1) {  // Skip the character before cursor
+          zstr_push(&new_buffer, data[i]);
+        }
+      }
+
+      zstr_free(buffer);
+      *buffer = new_buffer;
+      (*cursor)--;
+    }
+    return true;
+  }
+  return false;
 }
 
 // Parse symbolic key name to key code
@@ -261,6 +347,7 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
   }
 
   zstr confirm_input = zstr_init();
+  int confirm_cursor = 0;
   bool confirmed = false;
   bool is_test = (mode && mode->inject_keys);
 
@@ -302,14 +389,28 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
     // Line 1: title, Line 2: blank, Lines 3..3+items-1: items, then blank, then prompt
     // So prompt is at line: 1 (title) + 1 (blank) + items + 1 (blank before prompt) + 1 = 4 + items
     int prompt_line = 4 + max_show + ((int)marked_items.length > max_show ? 1 : 0);
-    int prompt_col = 22 + (int)zstr_len(&confirm_input); // "Type YES to confirm: " = 21 chars + 1
 
     Z_CLEANUP(zstr_free) zstr prompt = zstr_from("\x1b[K\n{dim}Type {/fg}{b}YES{/b}{dim} to confirm:{reset} ");
-    zstr_cat(&prompt, zstr_cstr(&confirm_input));
+
+    const char *confirm_cstr = zstr_cstr(&confirm_input);
+    int confirm_len = (int)zstr_len(&confirm_input);
+
+    // Clamp cursor to valid range
+    int cursor = confirm_cursor;
+    if (cursor < 0) cursor = 0;
+    if (cursor > confirm_len) cursor = confirm_len;
+
+    // Add text before cursor, cursor token, and text after cursor
+    zstr_cat_len(&prompt, confirm_cstr, cursor);
+    zstr_cat(&prompt, "{cursor}");
+    zstr_cat_len(&prompt, confirm_cstr + cursor, confirm_len - cursor);
+
     zstr_cat(&prompt, "\x1b[K");
 
-    Z_CLEANUP(zstr_free) zstr prompt_exp = zstr_expand_tokens(zstr_cstr(&prompt));
-    WRITE(STDERR_FILENO, zstr_cstr(&prompt_exp), zstr_len(&prompt_exp));
+    TokenExpansion prompt_exp = zstr_expand_tokens_with_cursor(zstr_cstr(&prompt));
+    int prompt_col = prompt_exp.cursor_pos;
+    WRITE(STDERR_FILENO, zstr_cstr(&prompt_exp.expanded), zstr_len(&prompt_exp.expanded));
+    zstr_free(&prompt_exp.expanded);
 
     WRITE(STDERR_FILENO, "\n\x1b[J", 4); // Newline then clear rest
 
@@ -335,12 +436,29 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
         confirmed = true;
       }
       break;
-    } else if (c == BACKSPACE || c == 127) {
-      if (zstr_len(&confirm_input) > 0) {
-        zstr_pop_char(&confirm_input);
-      }
+    } else if (handle_readline_keybinding(&confirm_input, &confirm_cursor, c)) {
+      // Keybinding was handled
     } else if (!iscntrl(c) && c < 128) {
-      zstr_push(&confirm_input, (char)c);
+      // Insert character at cursor position
+      int buffer_len = (int)zstr_len(&confirm_input);
+      Z_CLEANUP(zstr_free) zstr new_buffer = zstr_init();
+      char *data = zstr_data(&confirm_input);
+
+      for (int i = 0; i < buffer_len; i++) {
+        if (i == confirm_cursor) {
+          zstr_push(&new_buffer, (char)c);
+        }
+        zstr_push(&new_buffer, data[i]);
+      }
+
+      // If cursor is at the end, just append
+      if (confirm_cursor >= buffer_len) {
+        zstr_push(&new_buffer, (char)c);
+      }
+
+      zstr_free(&confirm_input);
+      confirm_input = new_buffer;
+      confirm_cursor++;
     }
   }
 
@@ -382,8 +500,29 @@ static void render(const char *base_path) {
   {
     Z_CLEANUP(zstr_free)
     zstr search_fmt = zstr_from("{b}Search:{/b} ");
-    zstr_cat(&search_fmt, zstr_cstr(&filter_buffer));
-    zstr_cat(&search_fmt, "{cursor}\x1b[K\n{dim}");
+
+    // Add filter buffer up to cursor position
+    const char *filter_cstr = zstr_cstr(&filter_buffer);
+    int buffer_len = (int)zstr_len(&filter_buffer);
+
+    // Clamp cursor to valid range
+    int cursor = filter_cursor;
+    if (cursor < 0) cursor = 0;
+    if (cursor > buffer_len) cursor = buffer_len;
+
+    // Add text before cursor
+    for (int i = 0; i < cursor; i++) {
+      zstr_push(&search_fmt, filter_cstr[i]);
+    }
+
+    zstr_cat(&search_fmt, "{cursor}");
+
+    // Add text after cursor
+    for (int i = cursor; i < buffer_len; i++) {
+      zstr_push(&search_fmt, filter_cstr[i]);
+    }
+
+    zstr_cat(&search_fmt, "\x1b[K\n{dim}");
     zstr_cat(&search_fmt, zstr_cstr(&sep_line));
     zstr_cat(&search_fmt, "{reset}\x1b[K\n");
 
@@ -616,8 +755,11 @@ SelectionResult run_selector(const char *base_path,
     zstr_clear(&filter_buffer);
   }
 
+  filter_cursor = 0;
+
   if (initial_filter) {
     zstr_cat(&filter_buffer, initial_filter);
+    filter_cursor = (int)zstr_len(&filter_buffer);  // Move cursor to end after initial filter
   }
 
   scan_tries(base_path);
@@ -637,6 +779,8 @@ SelectionResult run_selector(const char *base_path,
     enable_raw_mode();
 
     struct sigaction sa;
+
+    // Handle SIGWINCH (terminal resize)
     sa.sa_handler = handle_winch;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
@@ -659,6 +803,7 @@ SelectionResult run_selector(const char *base_path,
     } else {
       c = read_key();
     }
+
     if (c == KEY_RESIZE) {
       // Terminal was resized - continue to re-render with new dimensions
       // get_window_size() is called in render() to get updated size
@@ -734,23 +879,39 @@ SelectionResult run_selector(const char *base_path,
         zstr_free(&new_name);
       }
       break;
-    } else if (c == ARROW_UP) {
+    } else if (c == ARROW_UP || c == 16) {  // UP or Ctrl-P
       if (selected_index > 0)
         selected_index--;
-    } else if (c == ARROW_DOWN) {
+    } else if (c == ARROW_DOWN || c == 14) {  // DOWN or Ctrl-N
       int max_idx = filtered_ptrs.length;
       if (zstr_len(&filter_buffer) > 0)
         max_idx++;
       if (selected_index < max_idx - 1)
         selected_index++;
-    } else if (c == BACKSPACE || c == 127) {
-      if (zstr_len(&filter_buffer) > 0) {
-        // Simple backspace (remove last char)
-        zstr_pop_char(&filter_buffer);
-        filter_tries();
-      }
+    } else if (handle_readline_keybinding(&filter_buffer, &filter_cursor, c)) {
+      // Readline keybinding was handled - re-filter if buffer changed
+      filter_tries();
     } else if (!iscntrl(c) && c < 128) {
-      zstr_push(&filter_buffer, (char)c);
+      // Insert character at cursor position
+      int buffer_len = (int)zstr_len(&filter_buffer);
+      Z_CLEANUP(zstr_free) zstr new_buffer = zstr_init();
+      char *data = zstr_data(&filter_buffer);
+
+      for (int i = 0; i < buffer_len; i++) {
+        if (i == filter_cursor) {
+          zstr_push(&new_buffer, (char)c);
+        }
+        zstr_push(&new_buffer, data[i]);
+      }
+
+      // If cursor is at the end, just append
+      if (filter_cursor >= buffer_len) {
+        zstr_push(&new_buffer, (char)c);
+      }
+
+      zstr_free(&filter_buffer);
+      filter_buffer = new_buffer;
+      filter_cursor++;
       filter_tries();
     }
   }
