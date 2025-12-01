@@ -265,8 +265,8 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
   bool is_test = (mode && mode->inject_keys);
 
   while (1) {
-    WRITE(STDERR_FILENO, "\x1b[?25l", 6); // Hide cursor
-    WRITE(STDERR_FILENO, "\x1b[H", 3);    // Home
+    WRITE(STDOUT_FILENO, "\x1b[?25l", 6); // Hide cursor
+    WRITE(STDOUT_FILENO, "\x1b[H", 3);    // Home
 
     // Title
     Z_CLEANUP(zstr_free) zstr title = zstr_from("{b}Delete ");
@@ -278,7 +278,7 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
     zstr_cat(&title, "?{/b}\x1b[K\n\x1b[K\n");
 
     Z_CLEANUP(zstr_free) zstr title_exp = zstr_expand_tokens(zstr_cstr(&title));
-    WRITE(STDERR_FILENO, zstr_cstr(&title_exp), zstr_len(&title_exp));
+    WRITE(STDOUT_FILENO, zstr_cstr(&title_exp), zstr_len(&title_exp));
 
     // List items (max 10)
     int max_show = 10;
@@ -288,14 +288,14 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
       zstr_cat(&item, zstr_cstr(&marked_items.data[i]->name));
       zstr_cat(&item, "\x1b[K\n");
       Z_CLEANUP(zstr_free) zstr item_exp = zstr_expand_tokens(zstr_cstr(&item));
-      WRITE(STDERR_FILENO, zstr_cstr(&item_exp), zstr_len(&item_exp));
+      WRITE(STDOUT_FILENO, zstr_cstr(&item_exp), zstr_len(&item_exp));
     }
     if ((int)marked_items.length > max_show) {
       char more[64];
       snprintf(more, sizeof(more), "  {dim}...and %zu more{reset}\x1b[K\n",
                marked_items.length - max_show);
       Z_CLEANUP(zstr_free) zstr more_exp = zstr_expand_tokens(more);
-      WRITE(STDERR_FILENO, zstr_cstr(&more_exp), zstr_len(&more_exp));
+      WRITE(STDOUT_FILENO, zstr_cstr(&more_exp), zstr_len(&more_exp));
     }
 
     // Prompt - track line for cursor positioning
@@ -309,15 +309,15 @@ static bool render_delete_confirmation(const char *base_path, Mode *mode) {
     zstr_cat(&prompt, "\x1b[K");
 
     Z_CLEANUP(zstr_free) zstr prompt_exp = zstr_expand_tokens(zstr_cstr(&prompt));
-    WRITE(STDERR_FILENO, zstr_cstr(&prompt_exp), zstr_len(&prompt_exp));
+    WRITE(STDOUT_FILENO, zstr_cstr(&prompt_exp), zstr_len(&prompt_exp));
 
-    WRITE(STDERR_FILENO, "\n\x1b[J", 4); // Newline then clear rest
+    WRITE(STDOUT_FILENO, "\n\x1b[J", 4); // Newline then clear rest
 
     // Position cursor on prompt line after input
     char cursor_pos[32];
     snprintf(cursor_pos, sizeof(cursor_pos), "\x1b[%d;%dH", prompt_line, prompt_col);
-    WRITE(STDERR_FILENO, cursor_pos, strlen(cursor_pos));
-    WRITE(STDERR_FILENO, "\x1b[?25h", 6); // Show cursor
+    WRITE(STDOUT_FILENO, cursor_pos, strlen(cursor_pos));
+    WRITE(STDOUT_FILENO, "\x1b[?25h", 6); // Show cursor
 
     // Read key
     int c;
@@ -355,8 +355,8 @@ static void render(const char *base_path) {
   int rows, cols;
   get_window_size(&rows, &cols);
 
-  WRITE(STDERR_FILENO, "\x1b[?25l", 6); // Hide cursor
-  WRITE(STDERR_FILENO, "\x1b[H", 3);    // Home
+  WRITE(STDOUT_FILENO, "\x1b[?25l", 6); // Hide cursor
+  WRITE(STDOUT_FILENO, "\x1b[H", 3);    // Home
 
   // Build separator line dynamically (handles any terminal width)
   Z_CLEANUP(zstr_free) zstr sep_line = zstr_init();
@@ -373,7 +373,7 @@ static void render(const char *base_path) {
     zstr_cat(&header_fmt, "{reset}\x1b[K\n");
 
     Z_CLEANUP(zstr_free) zstr header = zstr_expand_tokens(zstr_cstr(&header_fmt));
-    WRITE(STDERR_FILENO, zstr_cstr(&header), zstr_len(&header));
+    WRITE(STDOUT_FILENO, zstr_cstr(&header), zstr_len(&header));
   }
 
   // Search bar - track cursor position
@@ -389,7 +389,7 @@ static void render(const char *base_path) {
 
     TokenExpansion search_exp = zstr_expand_tokens_with_cursor(zstr_cstr(&search_fmt));
     search_cursor_col = search_exp.cursor_pos;
-    WRITE(STDERR_FILENO, zstr_cstr(&search_exp.expanded), zstr_len(&search_exp.expanded));
+    WRITE(STDOUT_FILENO, zstr_cstr(&search_exp.expanded), zstr_len(&search_exp.expanded));
     zstr_free(&search_exp.expanded);
   }
 
@@ -522,11 +522,11 @@ static void render(const char *base_path) {
       zstr_cat(&line, "\x1b[K\n");
 
       Z_CLEANUP(zstr_free) zstr exp = zstr_expand_tokens(zstr_cstr(&line));
-      WRITE(STDERR_FILENO, zstr_cstr(&exp), zstr_len(&exp));
+      WRITE(STDOUT_FILENO, zstr_cstr(&exp), zstr_len(&exp));
 
     } else if (idx == (int)filtered_ptrs.length && zstr_len(&filter_buffer) > 0) {
       // Add separator line before "Create new"
-      WRITE(STDERR_FILENO, "\x1b[K\n", 4);
+      WRITE(STDOUT_FILENO, "\x1b[K\n", 4);
       i++; // Skip next iteration since we used a line for separator
 
       // Generate preview of what the directory name will be
@@ -555,7 +555,7 @@ static void render(const char *base_path) {
         zstr_cat(&line, "{reset}\x1b[K\n");
 
         Z_CLEANUP(zstr_free) zstr exp = zstr_expand_tokens(zstr_cstr(&line));
-        WRITE(STDERR_FILENO, zstr_cstr(&exp), zstr_len(&exp));
+        WRITE(STDOUT_FILENO, zstr_cstr(&exp), zstr_len(&exp));
       } else {
         Z_CLEANUP(zstr_free)
         zstr line = zstr_from("  📂 Create new: {dim}");
@@ -563,14 +563,14 @@ static void render(const char *base_path) {
         zstr_cat(&line, "{reset}\x1b[K\n");
 
         Z_CLEANUP(zstr_free) zstr exp = zstr_expand_tokens(zstr_cstr(&line));
-        WRITE(STDERR_FILENO, zstr_cstr(&exp), zstr_len(&exp));
+        WRITE(STDOUT_FILENO, zstr_cstr(&exp), zstr_len(&exp));
       }
     } else {
-      WRITE(STDERR_FILENO, "\x1b[K\n", 4);
+      WRITE(STDOUT_FILENO, "\x1b[K\n", 4);
     }
   }
 
-  WRITE(STDERR_FILENO, "\x1b[J", 3); // Clear rest
+  WRITE(STDOUT_FILENO, "\x1b[J", 3); // Clear rest
 
   // Footer
   {
@@ -591,16 +591,16 @@ static void render(const char *base_path) {
     }
 
     Z_CLEANUP(zstr_free) zstr footer = zstr_expand_tokens(zstr_cstr(&footer_fmt));
-    WRITE(STDERR_FILENO, zstr_cstr(&footer), zstr_len(&footer));
+    WRITE(STDOUT_FILENO, zstr_cstr(&footer), zstr_len(&footer));
   }
 
   // Position cursor in search field and show it
   if (search_cursor_col >= 0) {
     char cursor_pos[32];
     snprintf(cursor_pos, sizeof(cursor_pos), "\x1b[%d;%dH", search_line, search_cursor_col);
-    WRITE(STDERR_FILENO, cursor_pos, strlen(cursor_pos));
+    WRITE(STDOUT_FILENO, cursor_pos, strlen(cursor_pos));
   }
-  WRITE(STDERR_FILENO, "\x1b[?25h", 6); // Show cursor
+  WRITE(STDOUT_FILENO, "\x1b[?25h", 6); // Show cursor
 
   (void)base_path;
 }
@@ -759,10 +759,10 @@ SelectionResult run_selector(const char *base_path,
     // Reset terminal state completely
     disable_raw_mode();
     // Send final cleanup sequences
-    fprintf(stderr, "\x1b[0m");   // Reset all attributes
-    fprintf(stderr, "\x1b[2J");   // Clear screen
-    fprintf(stderr, "\x1b[H");    // Move cursor to home (1,1)
-    fflush(stderr);
+    fprintf(stdout, "\x1b[0m");   // Reset all attributes
+    fprintf(stdout, "\x1b[2J");   // Clear screen
+    fprintf(stdout, "\x1b[H");    // Move cursor to home (1,1)
+    fflush(stdout);
   }
 
   clear_state();

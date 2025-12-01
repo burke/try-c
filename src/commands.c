@@ -18,31 +18,42 @@
 // Script building and execution
 // ============================================================================
 
+// Extract path from cd command and write to FD 9 if available
+// Returns the path on success, or NULL on failure
+static const char *extract_cd_path(const char *script) {
+  // Find the cd line (starts with "  cd '" on its own line - 2-space indent)
+  const char *p = script;
+  while (*p) {
+    // Check if this line starts with "  cd '" (2-space indent)
+    if (strncmp(p, "  cd '", 6) == 0) {
+      return p + 6; // Skip "  cd '"
+    }
+    // Skip to next line
+    while (*p && *p != '\n') p++;
+    if (*p == '\n') p++;
+  }
+  return NULL;
+}
+
 // Build a script and either execute it (direct mode) or print it (exec mode)
 // Returns 0 on success, 1 on failure
 static int run_script(const char *script, Mode *mode) {
+  // Extract the path from cd command
+  const char *cd_path_start = extract_cd_path(script);
+  const char *cd_path_end = cd_path_start ? strchr(cd_path_start, '\'') : NULL;
+  size_t cd_path_len = (cd_path_start && cd_path_end) ? (cd_path_end - cd_path_start) : 0;
+
   if (mode->type == MODE_EXEC) {
     // Exec mode: print script with header for alias to eval
     printf(SCRIPT_HEADER);
     printf("%s", script);
     return 0;
   } else {
-    // Direct mode: execute via bash, then print cd hint if present
-    // We run everything except cd (which can't work in subprocess)
-    // Then print the cd command as a hint
-
+    // Direct mode: execute via bash, extract cd path, write to FD 9 if available
     // Find the cd line (starts with "  cd '" on its own line - 2-space indent)
-    const char *cd_line = NULL;
-    const char *p = script;
-    while (*p) {
-      // Check if this line starts with "  cd '" (2-space indent)
-      if (strncmp(p, "  cd '", 6) == 0) {
-        cd_line = p;
-        break;
-      }
-      // Skip to next line
-      while (*p && *p != '\n') p++;
-      if (*p == '\n') p++;
+    const char *cd_line = extract_cd_path(script);
+    if (cd_line) {
+      cd_line -= 6; // Back up to start of "  cd '"
     }
 
     // Build script without cd line for execution
@@ -90,12 +101,18 @@ static int run_script(const char *script, Mode *mode) {
       }
     }
 
-    // Print cd hint
-    if (cd_line) {
-      const char *path_start = cd_line + 6; // Skip "  cd '"
-      const char *path_end = strchr(path_start, '\'');
-      if (path_end) {
-        printf("cd '%.*s'\n", (int)(path_end - path_start), path_start);
+    // Write path to FD 9 if available, otherwise print as hint
+    if (cd_path_start && cd_path_end) {
+      FILE *fd9 = fdopen(9, "w");
+      if (fd9) {
+        // FD 9 is open, write the path there
+        fwrite(cd_path_start, 1, cd_path_len, fd9);
+        fwrite("\n", 1, 1, fd9);
+        fflush(fd9);
+        // Don't close fd9 - let the parent handle it
+      } else {
+        // FD 9 not available, print to stdout as hint for backward compat
+        printf("cd '%.*s'\n", (int)cd_path_len, cd_path_start);
       }
     }
 
@@ -260,11 +277,17 @@ void cmd_init(int argc, char **argv, const char *tries_path) {
     // Fish shell version
     printf(
       "function try\n"
-      "  set -l out ('%s' exec --path '%s' $argv 2>/dev/tty)\n"
-      "  if test $status -eq 0\n"
-      "    eval $out\n"
-      "  else\n"
-      "    echo $out\n"
+      "  set -l tmpfile (mktemp -u)\n"
+      "  exec 9>$tmpfile\n"
+      "  exec 8<$tmpfile\n"
+      "  rm -f $tmpfile\n"
+      "  '%s' --path '%s' cd \"$argv\"\n"
+      "  set -l target_dir\n"
+      "  read -u 8 target_dir\n"
+      "  exec 8<&-\n"
+      "  exec 9>&-\n"
+      "  if test -n \"$target_dir\"\n"
+      "    cd \"$target_dir\"\n"
       "  end\n"
       "end\n",
       self_path, tries_path);
@@ -272,12 +295,18 @@ void cmd_init(int argc, char **argv, const char *tries_path) {
     // Bash/Zsh version
     printf(
       "try() {\n"
-      "  local out\n"
-      "  out=$('%s' exec --path '%s' \"$@\" 2>/dev/tty)\n"
-      "  if [ $? -eq 0 ]; then\n"
-      "    eval \"$out\"\n"
-      "  else\n"
-      "    echo \"$out\"\n"
+      "  local tmpfile\n"
+      "  tmpfile=$(mktemp -u)\n"
+      "  exec 9>\"$tmpfile\"\n"
+      "  exec 8<\"$tmpfile\"\n"
+      "  rm -f \"$tmpfile\"\n"
+      "  '%s' --path '%s' cd \"$@\"\n"
+      "  local target_dir\n"
+      "  read -r target_dir <&8\n"
+      "  exec 8<&-\n"
+      "  exec 9>&-\n"
+      "  if [[ -n \"$target_dir\" ]]; then\n"
+      "    cd \"$target_dir\"\n"
       "  fi\n"
       "}\n",
       self_path, tries_path);
