@@ -37,6 +37,9 @@ sudo mv try-darwin-x86_64 /usr/local/bin/try
 # macOS (Apple Silicon)
 curl -sL https://github.com/tobi/try-c/releases/latest/download/try-darwin-aarch64.tar.gz | tar xz
 sudo mv try-darwin-aarch64 /usr/local/bin/try
+
+# Arch Linux (AUR)
+yay -S try-cli
 ```
 
 ### Shell integration
